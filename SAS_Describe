@@ -1,0 +1,134 @@
+
+/*The purpose of this macro is to provide a simple overview of the data. */
+/*How to use = %Describe(dsn=write name of the target data set)
+*/
+
+%macro Describe(dsn=);
+  /*Get colnames from dataset*/
+  proc contents data=&dsn. 
+                 out=var_info(keep=NAME LABEL TYPE varnum NOBS)
+  noprint;
+  run;
+
+  proc sort data=var_info;
+    by NAME;
+  run; 
+
+  /*Prepare for when there are no numeric variables*/
+  %let var_nume = "";
+
+  /*Get the names of numeric and character variables and into variable var_nume and var_char*/
+  proc sql noprint;
+    select NAME into :var_nume separated by " "
+    from var_info
+    where TYPE = 1;
+    select NAME into :var_char separated by " "
+    from var_info
+    where TYPE = 2;
+  quit;
+
+  /*Automatically generate proc sql code*/
+  data describe00;
+    set var_info;
+    /*If Numeric Variables
+      it will be sum(case when NAME = . then 1 else 0 end) as Name*/
+    if TYPE = 1
+    then null_code = cat("sum(case when ",
+                         compress(NAME),
+                         " = . then 1 else 0 end) as ",
+                         compress(NAME));
+
+    else if TYPE  = 2
+    /*If Character Variables
+    sum(case when compress(Name) in ("",".") then 1 else 0 end) as compress(Name)*/
+    then null_code = cat("sum(case when compress(",
+                         compress(NAME),
+                         ') in ("",".") then 1 else 0 end) as ',
+                         compress(NAME));
+  
+    count_code    = cat("count(distinct ",compress(NAME),") as ",compress(NAME));
+  run;
+
+  /*SQL code into a Macro variables*/
+  proc sql noprint;
+    select null_code, count_code 
+      into :null_code separated by ",", 
+           :count_code separated by ","
+    from describe00;
+  quit;
+
+  proc sql;
+    create table null_var as
+    select &null_code.
+    from &dsn.;
+  quit;
+
+  proc transpose data=null_var out=null_var_t(rename=(_NAME_ = NAME
+                                                      COL1   = NULLCT));
+  run;
+
+  proc sort data=null_var_t;
+    by NAME;
+  run;
+
+  proc sql;
+    create table uniq_var as
+    select &count_code
+    from &dsn.;
+  quit;
+
+  proc transpose data=uniq_var out=uniq_var_t(rename=(_NAME_ = NAME
+                                                      COL1   = UNIQCT));
+  run;
+
+  proc sort data=uniq_var_t;
+    by NAME;
+  run;
+  /*If dataset has no Numeric Variables, ods output summary and proc means can be some troubles.
+    So it Will only be executed if there is a numeric variables*/
+
+  %if &var_nume. ^= "" %then %do;
+  ods output summary=num_summary;
+    proc means data = &dsn.(keep=&var_nume.)
+         min p25 median p75 max mean var stackods;
+    run;
+  ods output close;
+
+    proc sort data = work.num_summary(rename=(Variable = NAME));
+      by NAME;
+    run;
+
+  %end;
+
+  %else %do;
+  /*Make empty dataset for merge*/
+  data num_summary;
+    NAME = "";
+  run;
+
+  %end;
+
+  data datamart;
+    format NAME LABEL VARNUM NULLCT NULL_per;
+    merge var_info(in=in1)
+          null_var_t(in=in2)
+    	  uniq_var_t(in=in3)
+    	  num_summary(in=in4);
+    by NAME;
+    NULL_per = NULLCT/NOBS;
+    label  NULLCT = "NULL_COUNT"
+           UNIQCT = "UNIQ_COUNT"
+  	       NULL_per = "NULL_PER";
+    format NULL_per percent10.2;
+  if NAME ^= "";
+  run;
+
+  proc sort data=datamart out=dr_&dsn.;
+    by VARNUM;
+  run;
+
+  proc delete data=var_info describe00 null_var null_var_t uniq_var uniq_var_t
+                   num_summary datamart;
+  run;
+
+%mend;
