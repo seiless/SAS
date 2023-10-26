@@ -1,1 +1,32 @@
+/*
+Sometimes we should same things for sevaral times.
+If you using Python, you can handle it like
+year_list = ["2021","2022","2023]
 
+for year in year_list:
+    print(year)
+
+In sas, we can't do same things. But with some proc sql and macro code, we can get a same results.
+*/
+data year_list;
+  attrib year length = $4.;
+  year = "2021"; output;
+  year = "2022"; output;
+  year = "2023"; output;
+run;
+
+/*now we use proc sql and into statement so we can make macro one macro variable with 3 years separated by space*/
+
+proc sql noprint;
+  select year :into year_list separated by " "
+  from year_list
+quit;
+
+/*after then, use %sysfunc and countw function*/
+%macro for_loop(list=);
+  %do i = 1 %to %sysfunc(countw(&list.," "));
+    %put %scan(&list.,&i.," ");
+  %end;
+%mend;
+
+%do_loop(list=&year_list.);
